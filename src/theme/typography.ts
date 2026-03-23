@@ -3,6 +3,7 @@ import { colors } from './colors';
 
 export const fonts = {
   displayBold:    'Manrope_800ExtraBold',
+  displayNumber:  'Outfit_900Black',      // hero financial numbers (net worth display)
   displayRegular: 'Manrope_400Regular',
   sansSemiBold:   'Manrope_600SemiBold',
   sansMedium:     'Manrope_500Medium',

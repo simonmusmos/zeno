@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -76,7 +76,7 @@ const BG_SPARKLES = [
 
 export function DashboardScreen() {
   const { user } = useAuth();
-  const { netWorth, assets, liabilities, accounts, baseCurrency } = useOnboarding();
+  const { netWorth, assets, liabilities, accounts, baseCurrency, ratesStatus, ratesUpdatedAt, refreshRates } = useOnboarding();
 
   const cardOp  = useRef(new Animated.Value(0)).current;
   const cardY   = useRef(new Animated.Value(24)).current;
@@ -95,6 +95,13 @@ export function DashboardScreen() {
       ]),
     ]).start();
   }, []);
+
+  // ── Auto-refresh 5 s after each animation settles ─────────────────────────
+  // Max animation duration = 9 steps × 80 ms = 720 ms → refresh at ~5.8 s after change.
+  useEffect(() => {
+    const id = setTimeout(refreshRates, 5_720);
+    return () => clearTimeout(id);
+  }, [netWorth]);
 
   const chartData  = useMemo(() => buildChartData(netWorth), [netWorth]);
   const symbol     = CCY_SYMBOLS[baseCurrency.code] ?? baseCurrency.symbol;
@@ -189,18 +196,18 @@ export function DashboardScreen() {
 
           {/* ─ Net worth block ─ */}
           <View style={s.nwBlock}>
-            <View style={s.nwLabelRow}>
-              <View style={s.nwAccentDot} />
-              <Text style={s.nwLabel}>NET WORTH</Text>
+            <View style={s.nwTopRow}>
+              <View style={s.nwLabelRow}>
+                <View style={s.nwAccentDot} />
+                <Text style={s.nwLabel}>NET WORTH</Text>
+              </View>
+              <RatesPill status={ratesStatus} updatedAt={ratesUpdatedAt} onRefresh={refreshRates} />
             </View>
 
-            <Text
-              style={[s.nwAmount, !isPositive && s.nwAmountNeg]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-            >
-              {formatCurrency(netWorth, baseCurrency.code)}
-            </Text>
+            <RollingNumber
+              formatted={formatCurrency(netWorth, baseCurrency.code)}
+              isPositive={isPositive}
+            />
 
             <View style={s.nwSubRow}>
               <Text style={s.nwCcy}>{baseCurrency.name}</Text>
@@ -298,6 +305,109 @@ export function DashboardScreen() {
     </View>
   );
 }
+
+// ── Slot-machine number display ───────────────────────────────────────────────
+
+const SLOT_H     = 64;  // matches lineHeight of nwAmount
+const DIGIT_W    = 38;  // fixed width for digit slots — prevents layout shift when
+                        // narrow chars (1) swap with wide chars (0, 8, 9) in Manrope ExtraBold
+
+function RollingChar({ char, color }: { char: string; color: string }) {
+  const prevRef = useRef(char);
+  const anim    = useRef(new Animated.Value(0)).current;
+  const [strip, setStrip] = useState<{ digits: string[]; goUp: boolean }>({ digits: [char], goUp: true });
+
+  useEffect(() => {
+    const from = prevRef.current;
+    const to   = char;
+    if (from === to) return;
+    prevRef.current = to;
+
+    // Non-digit chars swap instantly
+    if (!/\d/.test(from) || !/\d/.test(to)) {
+      setStrip({ digits: [to], goUp: true });
+      return;
+    }
+
+    const fromN  = parseInt(from);
+    const toN    = parseInt(to);
+    const goUp   = toN > fromN;
+    const steps  = Math.abs(toN - fromN);
+    const minN   = Math.min(fromN, toN);
+    const maxN   = Math.max(fromN, toN);
+
+    // Tape always in ascending order [min…max].
+    // Roll UP  (goUp): start at top (from), scroll upward   → translateY: 0 → -totalScroll
+    // Roll DOWN (!goUp): start at bottom (from), scroll downward → translateY: -totalScroll → 0
+    const tape: string[] = [];
+    for (let i = minN; i <= maxN; i++) tape.push(String(i));
+
+    setStrip({ digits: tape, goUp });
+    anim.setValue(0);
+
+    Animated.timing(anim, {
+      toValue:  1,
+      duration: Math.max(150, steps * 40),
+      easing:   Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) { setStrip({ digits: [to], goUp: true }); anim.setValue(0); }
+    });
+  }, [char]);
+
+  const isDigit   = /\d/.test(char);
+  const cellStyle = isDigit ? slot.digitCell : slot.cell;
+  const charStyle = [slot.char, isDigit && slot.charCentered, { color }];
+
+  if (strip.digits.length === 1) {
+    return (
+      <View style={cellStyle}>
+        <Text style={charStyle}>{strip.digits[0]}</Text>
+      </View>
+    );
+  }
+
+  const totalScroll = (strip.digits.length - 1) * SLOT_H;
+  // goUp:  tape top = from, animate 0 → -totalScroll  (tape moves up, higher digit revealed)
+  // goDown: tape bottom = from, animate -totalScroll → 0 (tape moves down, lower digit revealed)
+  const translateY = anim.interpolate({
+    inputRange:  [0, 1],
+    outputRange: strip.goUp ? [0, -totalScroll] : [-totalScroll, 0],
+  });
+
+  return (
+    <View style={cellStyle}>
+      <Animated.View style={{ transform: [{ translateY }] }}>
+        {strip.digits.map((d, i) => (
+          <Text key={i} style={[slot.char, slot.charCentered, { color, height: SLOT_H, lineHeight: SLOT_H }]}>
+            {d}
+          </Text>
+        ))}
+      </Animated.View>
+    </View>
+  );
+}
+
+function RollingNumber({ formatted, isPositive }: { formatted: string; isPositive: boolean }) {
+  const color = isPositive ? '#FFFFFF' : colors.liabilityColor;
+  const chars = formatted.split('');
+  const len   = chars.length;
+  return (
+    <View style={slot.row}>
+      {chars.map((char, i) => (
+        <RollingChar key={len - i} char={char} color={color} />
+      ))}
+    </View>
+  );
+}
+
+const slot = StyleSheet.create({
+  row:         { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  cell:        { height: SLOT_H, overflow: 'hidden' },
+  digitCell:   { height: SLOT_H, overflow: 'hidden', width: DIGIT_W },
+  char:        { fontFamily: fonts.displayNumber, fontSize: 58, lineHeight: SLOT_H, letterSpacing: -2 },
+  charCentered:{ textAlign: 'center' },
+});
 
 // ── ChartBars ─────────────────────────────────────────────────────────────────
 
@@ -476,6 +586,82 @@ function FAB() {
   );
 }
 
+// ── RatesPill ─────────────────────────────────────────────────────────────────
+
+import type { RatesStatus } from '../../store/onboarding.store';
+
+function RatesPill({ status, updatedAt, onRefresh }: {
+  status: RatesStatus;
+  updatedAt: number | null;
+  onRefresh: () => Promise<void>;
+}) {
+  const spin = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (status === 'loading') {
+      Animated.loop(
+        Animated.timing(spin, { toValue: 1, duration: 900, easing: Easing.linear, useNativeDriver: true }),
+      ).start();
+    } else {
+      spin.stopAnimation();
+      spin.setValue(0);
+    }
+  }, [status]);
+
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  const label = status === 'loading' ? 'Updating…'
+    : status === 'live'    ? 'Live'
+    : status === 'fresh'   ? (() => {
+        if (!updatedAt) return 'Rates updated';
+        const mins = Math.floor((Date.now() - updatedAt) / 60000);
+        return mins < 1 ? 'Just updated' : `${mins}m ago`;
+      })()
+    : status === 'error'   ? 'Rates offline'
+    : 'Cached rates';
+
+  const dotColor = status === 'live'  ? colors.assetColor
+    : status === 'fresh'  ? colors.assetColor
+    : status === 'error'  ? colors.liabilityColor
+    : colors.textMuted;
+
+  return (
+    <Pressable
+      style={rs.pill}
+      onPress={status !== 'loading' ? onRefresh : undefined}
+      hitSlop={10}
+      accessibilityLabel={`Exchange rates: ${label}. Tap to refresh.`}
+      accessibilityRole="button"
+    >
+      {status === 'loading' ? (
+        <Animated.View style={{ transform: [{ rotate }] }}>
+          <Ionicons name="refresh" size={9} color={colors.textMuted} />
+        </Animated.View>
+      ) : (
+        <View style={[rs.dot, { backgroundColor: dotColor }]} />
+      )}
+      <Text style={rs.label}>{label}</Text>
+    </Pressable>
+  );
+}
+
+const rs = StyleSheet.create({
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 99,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 9,
+  },
+  dot: { width: 5, height: 5, borderRadius: 3 },
+  label: { fontFamily: fonts.sansRegular, fontSize: 10, color: colors.textMuted, letterSpacing: 0.2 },
+});
+
 // ── Main styles ───────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
@@ -582,7 +768,12 @@ const s = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 18,
   },
-  nwLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 8 },
+  nwTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  nwLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 9 },
   nwAccentDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.accent, opacity: 0.85 },
   nwLabel: {
     fontFamily: fonts.sansSemiBold,
@@ -605,9 +796,9 @@ const s = StyleSheet.create({
     color: colors.textMuted,
   },
   nwAmount: {
-    fontFamily: fonts.displayBold,
+    fontFamily: fonts.displayNumber,
     fontSize: 58,
-    letterSpacing: -3,
+    letterSpacing: -2,
     color: '#FFFFFF',
     lineHeight: 64,
     marginBottom: 8,

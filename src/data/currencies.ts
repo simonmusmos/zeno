@@ -14,15 +14,22 @@ export const USD_RATES: Record<string, number> = {
   PKR: 0.0036,  BDT: 0.0091,
 };
 
-/** Convert amount from one currency to another using USD as the bridge */
-export function convertCurrency(
+/** Convert using a provided rates table (USD-based). Falls back to static USD_RATES. */
+export function convertWithRates(
   amount: number,
   from: string,
   to: string,
+  rates: Record<string, number>,
 ): number {
-  const fromRate = USD_RATES[from] ?? 1;
-  const toRate   = USD_RATES[to]   ?? 1;
+  if (from === to) return amount;
+  const fromRate = rates[from] ?? USD_RATES[from] ?? 1;
+  const toRate   = rates[to]   ?? USD_RATES[to]   ?? 1;
   return (amount * fromRate) / toRate;
+}
+
+/** Legacy static conversion — used as fallback only */
+export function convertCurrency(amount: number, from: string, to: string): number {
+  return convertWithRates(amount, from, to, USD_RATES);
 }
 
 export const CURRENCIES: Currency[] = [

@@ -4,6 +4,7 @@ import {
   Manrope_600SemiBold,
   Manrope_800ExtraBold,
 } from '@expo-google-fonts/manrope';
+import { Outfit_900Black } from '@expo-google-fonts/outfit';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
@@ -25,6 +26,7 @@ function AppContent() {
     Manrope_500Medium,
     Manrope_600SemiBold,
     Manrope_800ExtraBold,
+    Outfit_900Black,
   });
 
   const ready = (fontsLoaded || !!fontError) && authHydrated && onboardingHydrated;
